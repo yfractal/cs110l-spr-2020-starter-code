@@ -7,15 +7,47 @@ fn main() {
 }
 
 fn add_n(v: Vec<i32>, n: i32) -> Vec<i32> {
-    unimplemented!()
+    let mut new_v = Vec::new();
+    for i in v.iter() {
+        // v is the vector from above
+        new_v.push(n + i);
+    }
+
+    new_v
 }
 
 fn add_n_inplace(v: &mut Vec<i32>, n: i32) {
-    unimplemented!()
+    for i in v.iter_mut() {
+        *i = *i + n;
+    }
 }
 
 fn dedup(v: &mut Vec<i32>) {
-    unimplemented!()
+    let mut indexes = vec![];
+    let mut hs: HashSet<i32> = HashSet::new();
+
+    let mut i = 0;
+    for ele in v.iter() {
+        if hs.contains(ele) {
+            indexes.push(i);
+        } else {
+            hs.insert(*ele);
+        }
+
+        i += 1;
+    }
+
+    let mut x: usize = indexes.len() - 1;
+
+    // true
+    // while x > 0 will have warning ..........
+    loop {
+        v.remove(indexes[x]);
+        if x == 0 {
+            break;
+        }
+        x = x - 1;
+    }
 }
 
 #[cfg(test)]
