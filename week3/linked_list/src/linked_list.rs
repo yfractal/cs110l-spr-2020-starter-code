@@ -6,6 +6,7 @@ pub struct LinkedList<T> {
     size: usize,
 }
 
+#[derive(Clone, PartialEq)]
 struct Node<T> {
     value: T,
     next: Option<Box<Node<T>>>,
@@ -47,6 +48,27 @@ impl<T> LinkedList<T> {
         self.head = node.next;
         self.size -= 1;
         Some(node.value)
+    }
+}
+
+impl<T> Clone for LinkedList<T>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        LinkedList {
+            head: self.head.clone(),
+            size: self.size,
+        }
+    }
+}
+
+impl<T> PartialEq for LinkedList<T>
+where
+    T: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.size == other.size && self.head == other.head
     }
 }
 
