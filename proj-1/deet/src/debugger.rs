@@ -1,6 +1,6 @@
 use crate::debugger_command::DebuggerCommand;
 use crate::dwarf_data::{DwarfData, Error as DwarfError};
-use crate::inferior::Inferior;
+use crate::inferior::{Inferior, Status};
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 
@@ -59,17 +59,29 @@ impl Debugger {
                         // Create the inferior
                         self.inferior = Some(inferior);
 
-                        // TODO: when to use `?``
-                        self.inferior.as_ref().unwrap().cont().unwrap();
                         self.running = true;
-                        // to the Inferior object
+                        // TODO: when to use `?``
+                        let status = self.inferior.as_ref().unwrap().cont().unwrap();
+                        match status {
+                            Status::Stopped(signal, rip) => {
+                                println!("Child stopped (signal {})", signal);
+
+                                let line = self.debug_data
+                                    .get_line_from_addr(rip as usize)
+                                    .unwrap();
+                                println!("Stopped at {}:{}", line.file, line.number)
+
+                            },
+                            other => { println!("Child stopped as {:?}", other) }
+                        }
                     } else {
                         println!("Error starting subprocess");
                     }
                 }
                 DebuggerCommand::Continue => {
                     if self.running {
-                        self.inferior.as_ref().unwrap().cont().unwrap();
+                        let result = self.inferior.as_ref().unwrap().cont().unwrap();
+                        println!("[debug] result={:?}", result);
                     } else {
                         println!("Please run the target program first!");
                     }
