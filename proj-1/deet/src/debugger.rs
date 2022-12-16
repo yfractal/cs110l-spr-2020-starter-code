@@ -1,4 +1,5 @@
 use crate::debugger_command::DebuggerCommand;
+use crate::dwarf_data::{DwarfData, Error as DwarfError};
 use crate::inferior::Inferior;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
@@ -8,6 +9,8 @@ pub struct Debugger {
     history_path: String,
     readline: Editor<()>,
     inferior: Option<Inferior>,
+    running: bool,
+    debug_data: DwarfData,
 }
 
 impl Debugger {
@@ -20,11 +23,27 @@ impl Debugger {
         // Attempt to load history from ~/.deet_history if it exists
         let _ = readline.load_history(&history_path);
 
+        let debug_data = match DwarfData::from_file(target) {
+            Ok(val) => val,
+            Err(DwarfError::ErrorOpeningFile) => {
+                println!("Could not open file {}", target);
+                std::process::exit(1);
+            }
+            Err(DwarfError::DwarfFormatError(err)) => {
+                println!("Could not debugging symbols from {}: {:?}", target, err);
+                std::process::exit(1);
+            }
+        };
+
+        println!("debug_data={:?}", debug_data);
+
         Debugger {
             target: target.to_string(),
             history_path,
             readline,
             inferior: None,
+            running: false,
+            debug_data: debug_data,
         }
     }
 
@@ -32,18 +51,51 @@ impl Debugger {
         loop {
             match self.get_next_command() {
                 DebuggerCommand::Run(args) => {
+                    if self.running {
+                        println!("The target program is running, will stop it");
+                        self.inferior.as_mut().unwrap().kill();
+                    }
                     if let Some(inferior) = Inferior::new(&self.target, &args) {
                         // Create the inferior
                         self.inferior = Some(inferior);
 
-                        // TODO: when to use ?
+                        // TODO: when to use `?``
                         self.inferior.as_ref().unwrap().cont().unwrap();
+                        self.running = true;
                         // to the Inferior object
                     } else {
                         println!("Error starting subprocess");
                     }
                 }
+                DebuggerCommand::Continue => {
+                    if self.running {
+                        self.inferior.as_ref().unwrap().cont().unwrap();
+                    } else {
+                        println!("Please run the target program first!");
+                    }
+                }
+                DebuggerCommand::Backtrace => {
+                    if self.running {
+                        let rv = self
+                            .inferior
+                            .as_ref()
+                            .unwrap()
+                            .backtrace(&self.debug_data)
+                            .unwrap();
+                        println!("rv={:#?}", rv);
+                    } else {
+                        println!("Please run the target program first!");
+                    }
+                }
                 DebuggerCommand::Quit => {
+                    if self.running {
+                        println!(
+                            "Killing running inferior (pid {})",
+                            self.inferior.as_ref().unwrap().pid()
+                        );
+
+                        self.inferior.as_mut().unwrap().kill();
+                    }
                     return;
                 }
             }

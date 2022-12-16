@@ -86,4 +86,11 @@ impl Inferior {
         ptrace::cont(self.pid(), None);
         self.wait(None)
     }
+
+    pub fn kill(&mut self) {
+        self.child.kill();
+        println!("start waiting kill");
+        self.child.wait().expect("Failed to wait on child process");
+        println!("waiting kill end");
+    }
 }
