@@ -1,3 +1,4 @@
+use crate::dwarf_data::DwarfData;
 use nix::sys::ptrace;
 use nix::sys::signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
@@ -6,6 +7,7 @@ use std::os::unix::process::CommandExt;
 use std::process::Child;
 use std::process::Command;
 
+#[derive(Debug)]
 pub enum Status {
     /// Indicates inferior stopped. Contains the signal that stopped the process, as well as the
     /// current instruction pointer that it is stopped at.
@@ -42,7 +44,6 @@ impl Inferior {
         let mut cmd = Command::new(target);
         // TODO: why need cmd2
         let cmd2 = cmd.args(args);
-        // TODO: whye unsafe
         unsafe {
             cmd2.pre_exec(child_traceme);
         }
@@ -92,5 +93,44 @@ impl Inferior {
         println!("start waiting kill");
         self.child.wait().expect("Failed to wait on child process");
         println!("waiting kill end");
+    }
+
+    pub fn backtrace(&self, debug_data: &DwarfData) -> Result<Status, nix::Error> {
+        // println!("backtrace is called");
+        let regs = ptrace::getregs(self.pid())?;
+        let mut instruction_ptr = regs.rip;
+        // start of current frame
+
+        // memory: hith ---> low
+        // frame:  start_of_frame(frame top) ............ end_of_frame(bottom of frame)
+        //              /\                                     /\
+        //               |                                      |
+        //              rbp                                    rsp
+        let mut frame_ptr = regs.rbp;
+        // TODO: consider better error handling
+        loop {
+            // println!("instruction_ptr={}", instruction_ptr);
+            let line = debug_data
+                .get_line_from_addr(instruction_ptr as usize)
+                .unwrap();
+            let func = debug_data
+                .get_function_from_addr(instruction_ptr as usize)
+                .unwrap();
+
+            println!("{} ({}:{})", func, line.file, line.number);
+
+            if func == "main" {
+                break;
+            }
+
+            // get return address base on fp
+            instruction_ptr =
+                ptrace::read(self.pid(), (frame_ptr + 8) as ptrace::AddressType)? as u64;
+
+            // walk back throuh frame pointer
+            frame_ptr = ptrace::read(self.pid(), frame_ptr as ptrace::AddressType)? as u64;
+        }
+
+        self.wait(None)
     }
 }
