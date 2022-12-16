@@ -11,6 +11,7 @@ pub struct Debugger {
     inferior: Option<Inferior>,
     running: bool,
     debug_data: DwarfData,
+    breakpoints: Vec<usize>,
 }
 
 impl Debugger {
@@ -35,7 +36,8 @@ impl Debugger {
             }
         };
 
-        println!("debug_data={:?}", debug_data);
+        println!("[debug]: debug_data");
+        debug_data.print();
 
         Debugger {
             target: target.to_string(),
@@ -44,6 +46,7 @@ impl Debugger {
             inferior: None,
             running: false,
             debug_data: debug_data,
+            breakpoints: Vec::new(),
         }
     }
 
@@ -53,26 +56,39 @@ impl Debugger {
                 DebuggerCommand::Run(args) => {
                     if self.running {
                         println!("The target program is running, will stop it");
+
                         self.inferior.as_mut().unwrap().kill();
+                        self.running = false;
                     }
                     if let Some(inferior) = Inferior::new(&self.target, &args) {
                         // Create the inferior
                         self.inferior = Some(inferior);
 
                         self.running = true;
+
+                        println!("loading breakpoint");
+                        for breakpoint in self.breakpoints.iter() {
+                            println!("[debug] breakpoint={}", breakpoint);
+                            self.inferior
+                                .as_mut()
+                                .unwrap()
+                                .breakpoint(*breakpoint) // why need reference
+                                .unwrap();
+                        }
+
                         // TODO: when to use `?``
                         let status = self.inferior.as_ref().unwrap().cont().unwrap();
                         match status {
                             Status::Stopped(signal, rip) => {
                                 println!("Child stopped (signal {})", signal);
 
-                                let line = self.debug_data
-                                    .get_line_from_addr(rip as usize)
-                                    .unwrap();
+                                let line =
+                                    self.debug_data.get_line_from_addr(rip as usize).unwrap();
                                 println!("Stopped at {}:{}", line.file, line.number)
-
-                            },
-                            other => { println!("Child stopped as {:?}", other) }
+                            }
+                            other => {
+                                println!("Child stopped as {:?}", other)
+                            }
                         }
                     } else {
                         println!("Error starting subprocess");
@@ -97,6 +113,16 @@ impl Debugger {
                         println!("rv={:#?}", rv);
                     } else {
                         println!("Please run the target program first!");
+                    }
+                }
+                DebuggerCommand::Breakpoint(raw_addr) => {
+                    let addr = self::parse_address(&raw_addr).unwrap();
+                    println!("parsed addr={:?}", addr);
+
+                    if !self.running {
+                        self.breakpoints.push(addr);
+                    } else {
+                        let rv = self.inferior.as_mut().unwrap().breakpoint(addr).unwrap();
                     }
                 }
                 DebuggerCommand::Quit => {
@@ -154,4 +180,14 @@ impl Debugger {
             }
         }
     }
+}
+
+fn parse_address(addr: &str) -> Option<usize> {
+    let addr_without_0x = if addr.to_lowercase().starts_with("*0x") {
+        &addr[3..]
+    } else {
+        &addr
+    };
+
+    usize::from_str_radix(addr_without_0x, 16).ok()
 }
