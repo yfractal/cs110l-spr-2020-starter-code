@@ -136,6 +136,7 @@ impl Inferior {
 
         self.wait(None)
     }
+
     pub fn getrip(&self) -> u64 {
         ptrace::getregs(self.pid()).unwrap().rip
     }

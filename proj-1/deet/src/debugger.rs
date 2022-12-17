@@ -47,7 +47,7 @@ impl Debugger {
             readline,
             inferior: None,
             running: false,
-            debug_data: debug_data,
+            debug_data,
             breakpoints: Vec::new(),
             breakpoint_map: HashMap::new(),
         }
@@ -58,31 +58,40 @@ impl Debugger {
             match self.get_next_command() {
                 DebuggerCommand::Run(args) => {
                     if self.running {
-                        println!("The target program is running, will stop it");
+                        let inferior = self.inferior.as_mut().unwrap();
+                        match inferior.kill() {
+                            Ok(status) => {
+                                println!(
+                                    "child process is killed pid={}, status={}",
+                                    inferior.pid(),
+                                    status
+                                );
+                            }
+                            Err(error) => {
+                                println!("Can't kill child, error={}", error)
+                            }
+                        }
 
-                        self.inferior.as_mut().unwrap().kill();
                         self.running = false;
                     }
+
                     if let Some(inferior) = Inferior::new(&self.target, &args) {
-                        // Create the inferior
                         self.inferior = Some(inferior);
 
                         self.running = true;
 
-                        println!("loading breakpoint");
                         for breakpoint in self.breakpoints.iter() {
-                            println!("[debug] breakpoint={}", breakpoint);
                             let orig_byte = self
                                 .inferior
                                 .as_mut()
                                 .unwrap()
-                                .breakpoint(*breakpoint) // why need reference
+                                .breakpoint(*breakpoint)
                                 .unwrap();
                             self.breakpoint_map.insert(*breakpoint as u64, orig_byte);
                         }
 
-                        // TODO: when to use `?``
                         let status = self.inferior.as_ref().unwrap().cont().unwrap();
+
                         match status {
                             Status::Stopped(signal, rip) => {
                                 println!("Child stopped (signal {})", signal);
@@ -133,50 +142,10 @@ impl Debugger {
                         println!("Error starting subprocess");
                     }
                 }
-                DebuggerCommand::Continue => {
-                    if self.running {
-                        let result = self.inferior.as_ref().unwrap().cont().unwrap();
-                        println!("[debug] result={:?}", result);
-                    } else {
-                        println!("Please run the target program first!");
-                    }
-                }
-                DebuggerCommand::Backtrace => {
-                    if self.running {
-                        let rv = self
-                            .inferior
-                            .as_ref()
-                            .unwrap()
-                            .backtrace(&self.debug_data)
-                            .unwrap();
-                        println!("rv={:#?}", rv);
-                    } else {
-                        println!("Please run the target program first!");
-                    }
-                }
-                DebuggerCommand::Breakpoint(raw_addr) => {
-                    let addr = self.parse_address(&raw_addr).unwrap();
-                    println!("parsed addr={:?}", addr);
-
-                    if !self.running {
-                        // ptrace::read(self.pid(), frame_ptr as ptrace::AddressType)? as u64;
-                        self.breakpoints.push(addr);
-                    } else {
-                        let orig_byte = self.inferior.as_mut().unwrap().breakpoint(addr).unwrap();
-                        self.breakpoint_map.insert(addr as u64, orig_byte);
-                    }
-                }
-                DebuggerCommand::Quit => {
-                    if self.running {
-                        println!(
-                            "Killing running inferior (pid {})",
-                            self.inferior.as_ref().unwrap().pid()
-                        );
-
-                        self.inferior.as_mut().unwrap().kill();
-                    }
-                    return;
-                }
+                DebuggerCommand::Continue => self.handle_cont_command(),
+                DebuggerCommand::Backtrace => self.handle_backtrace_command(),
+                DebuggerCommand::Breakpoint(raw_addr) => self.handle_breakpoint(&raw_addr),
+                DebuggerCommand::Quit => self.handle_quit(),
             }
         }
     }
@@ -236,5 +205,53 @@ impl Debugger {
                 _ => usize::from_str_radix(addr_without_0x, 16).ok(),
             },
         }
+    }
+
+    fn handle_cont_command(&self) {
+        if !self.running {
+            return println!("Please run the target program first!");
+        }
+
+        match self.inferior.as_ref().unwrap().cont() {
+            // use :? for saving devlopment time, it's a toy project anyway
+            Ok(status) => println!("Child stopped status={:?}", status),
+            Err(err) => println!("error={}", err),
+        }
+    }
+
+    fn handle_backtrace_command(&self) {
+        if !self.running {
+            return println!("Please run the target program first!");
+        }
+
+        let inferior = self.inferior.as_ref().unwrap();
+        match inferior.backtrace(&self.debug_data) {
+            Ok(status) => println!("Child stopped status={:?}", status),
+            Err(err) => println!("error={}", err),
+        }
+    }
+
+    fn handle_breakpoint(&mut self, raw_addr: &str) {
+        let addr = self.parse_address(&raw_addr).unwrap();
+
+        if !self.running {
+            self.breakpoints.push(addr);
+        } else {
+            let inferior = self.inferior.as_mut().unwrap();
+            let orig_byte = inferior.breakpoint(addr).unwrap();
+            self.breakpoint_map.insert(addr as u64, orig_byte);
+        }
+    }
+
+    fn handle_quit(&mut self) {
+        if !self.running {
+            return println!("Please run the target program first!");
+        }
+        println!(
+            "Killing running inferior (pid {})",
+            self.inferior.as_ref().unwrap().pid()
+        );
+
+        self.inferior.as_mut().unwrap().kill();
     }
 }
