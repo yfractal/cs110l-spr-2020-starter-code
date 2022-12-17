@@ -56,7 +56,7 @@ impl Inferior {
                 println!("The program is stopped, signal={:?}, rip={:?}", signal, rip);
                 Some(inferior)
             }
-            other => {
+            _other => {
                 println!("The program is not stopped, return None");
                 None
             }
@@ -84,16 +84,18 @@ impl Inferior {
     }
 
     pub fn cont(&self) -> Result<Status, nix::Error> {
-        println!("inferior cont is called");
-        ptrace::cont(self.pid(), None);
+        ptrace::cont(self.pid(), None)?;
         self.wait(None)
     }
 
-    pub fn kill(&mut self) {
-        self.child.kill();
-        println!("start waiting kill");
-        self.child.wait().expect("Failed to wait on child process");
-        println!("waiting kill end");
+    pub fn kill(&mut self) -> Result<std::process::ExitStatus, std::io::Error> {
+        match self.child.kill() {
+            Ok(_) => {
+                let status = self.child.wait()?;
+                Ok(status)
+            }
+            Err(err) => Err(err),
+        }
     }
 
     pub fn backtrace(&self, debug_data: &DwarfData) -> Result<Status, nix::Error> {
