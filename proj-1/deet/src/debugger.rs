@@ -24,7 +24,6 @@ impl Debugger {
 
         let history_path = format!("{}/.deet_history", std::env::var("HOME").unwrap());
         let mut readline = Editor::<()>::new();
-        // Attempt to load history from ~/.deet_history if it exists
         let _ = readline.load_history(&history_path);
 
         let debug_data = match DwarfData::from_file(target) {
@@ -156,7 +155,7 @@ impl Debugger {
                     }
                 }
                 DebuggerCommand::Breakpoint(raw_addr) => {
-                    let addr = self::parse_address(&raw_addr).unwrap();
+                    let addr = self.parse_address(&raw_addr).unwrap();
                     println!("parsed addr={:?}", addr);
 
                     if !self.running {
@@ -222,14 +221,20 @@ impl Debugger {
             }
         }
     }
-}
 
-fn parse_address(addr: &str) -> Option<usize> {
-    let addr_without_0x = if addr.to_lowercase().starts_with("*0x") {
-        &addr[3..]
-    } else {
-        &addr
-    };
+    fn parse_address(&self, addr: &str) -> Option<usize> {
+        let addr_without_0x = if addr.to_lowercase().starts_with("*0x") {
+            &addr[3..]
+        } else {
+            &addr
+        };
 
-    usize::from_str_radix(addr_without_0x, 16).ok()
+        match addr_without_0x.parse::<usize>() {
+            Ok(line) => self.debug_data.get_addr_for_line(None, line), // doesn't work...
+            _ => match self.debug_data.get_addr_for_function(None, addr_without_0x) {
+                Some(addr) => Some(addr),
+                _ => usize::from_str_radix(addr_without_0x, 16).ok(),
+            },
+        }
+    }
 }
