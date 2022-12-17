@@ -56,96 +56,11 @@ impl Debugger {
     pub fn run(&mut self) {
         loop {
             match self.get_next_command() {
-                DebuggerCommand::Run(args) => {
-                    if self.running {
-                        let inferior = self.inferior.as_mut().unwrap();
-                        match inferior.kill() {
-                            Ok(status) => {
-                                println!(
-                                    "child process is killed pid={}, status={}",
-                                    inferior.pid(),
-                                    status
-                                );
-                            }
-                            Err(error) => {
-                                println!("Can't kill child, error={}", error)
-                            }
-                        }
-
-                        self.running = false;
-                    }
-
-                    if let Some(inferior) = Inferior::new(&self.target, &args) {
-                        self.inferior = Some(inferior);
-
-                        self.running = true;
-
-                        for breakpoint in self.breakpoints.iter() {
-                            let orig_byte = self
-                                .inferior
-                                .as_mut()
-                                .unwrap()
-                                .breakpoint(*breakpoint)
-                                .unwrap();
-                            self.breakpoint_map.insert(*breakpoint as u64, orig_byte);
-                        }
-
-                        let status = self.inferior.as_ref().unwrap().cont().unwrap();
-
-                        match status {
-                            Status::Stopped(signal, rip) => {
-                                println!("Child stopped (signal {})", signal);
-
-                                let line =
-                                    self.debug_data.get_line_from_addr(rip as usize).unwrap();
-                                println!("Stopped at {}:{}", line.file, line.number);
-
-                                // TODO: checking (%rip - 1) matches a breakpoint address
-                                if signal == signal::Signal::SIGTRAP {
-                                    // TODO: some many self.inferior.as_ref().unwrap() self.inferior.as_mut().unwrap()
-                                    let prev_rip = self.inferior.as_ref().unwrap().getrip() - 1;
-                                    println!("[debug][breakpoint] prev_rip={}", prev_rip);
-
-                                    // write origin back
-                                    let orig_byte = self.breakpoint_map.get(&prev_rip).unwrap();
-                                    self.inferior
-                                        .as_mut()
-                                        .unwrap()
-                                        .write_byte(prev_rip as usize, *orig_byte)
-                                        .unwrap();
-
-                                    self.inferior.as_ref().unwrap().go_back_one_step().unwrap();
-                                    self.inferior.as_ref().unwrap().step().unwrap();
-                                    let wait_status =
-                                        self.inferior.as_ref().unwrap().wait(None).unwrap();
-
-                                    let current_rip = self.inferior.as_ref().unwrap().getrip();
-                                    println!(
-                                        "[debug][breakpoing]: .... wait_status={:?}, rip={}",
-                                        wait_status, current_rip
-                                    );
-
-                                    self.inferior
-                                        .as_mut()
-                                        .unwrap()
-                                        .write_byte(prev_rip as usize, 204)
-                                        .unwrap();
-
-                                    self.inferior.as_ref().unwrap().cont().unwrap();
-                                }
-                            }
-                            other => {
-                                println!("Child stopped as {:?}", other)
-                            }
-                        }
-                    } else {
-                        println!("Error starting subprocess");
-                    }
-                }
+                DebuggerCommand::Run(args) => self.handle_run_command(&args),
                 DebuggerCommand::Continue => self.handle_cont_command(),
                 DebuggerCommand::Backtrace => self.handle_backtrace_command(),
-                DebuggerCommand::Breakpoint(raw_addr) => self.handle_breakpoint(&raw_addr),
-                DebuggerCommand::Quit => self.handle_quit(),
+                DebuggerCommand::Breakpoint(raw_addr) => self.handle_breakpoint_command(&raw_addr),
+                DebuggerCommand::Quit => self.handle_quit_command(),
             }
         }
     }
@@ -231,7 +146,7 @@ impl Debugger {
         }
     }
 
-    fn handle_breakpoint(&mut self, raw_addr: &str) {
+    fn handle_breakpoint_command(&mut self, raw_addr: &str) {
         let addr = self.parse_address(&raw_addr).unwrap();
 
         if !self.running {
@@ -243,15 +158,90 @@ impl Debugger {
         }
     }
 
-    fn handle_quit(&mut self) {
+    fn handle_quit_command(&mut self) {
         if !self.running {
             return println!("Please run the target program first!");
         }
-        println!(
-            "Killing running inferior (pid {})",
-            self.inferior.as_ref().unwrap().pid()
-        );
 
-        self.inferior.as_mut().unwrap().kill();
+        self.do_kill();
+    }
+
+    fn handle_run_command(&mut self, args: &Vec<String>) {
+        if self.running {
+            self.do_kill();
+        }
+
+        if let Some(inferior) = Inferior::new(&self.target, &args) {
+            self.inferior = Some(inferior);
+            self.running = true;
+
+            self.set_breakpoints();
+
+            let status = self.inferior.as_ref().unwrap().cont().unwrap();
+
+            match status {
+                Status::Stopped(signal, rip) => {
+                    if signal == signal::Signal::SIGTRAP {
+                        self.handle_stop_at_breakpoint(rip);
+                    }
+                }
+                other => {
+                    println!("Child stopped as {:?}", other)
+                }
+            }
+        } else {
+            println!("Error starting subprocess");
+        }
+    }
+
+    fn do_kill(&mut self) {
+        let inferior = self.inferior.as_mut().unwrap();
+        println!("Killing running inferior (pid {})", inferior.pid());
+        match inferior.kill() {
+            Ok(status) => {
+                println!(
+                    "child process is killed pid={}, status={}",
+                    inferior.pid(),
+                    status
+                );
+            }
+            Err(error) => {
+                println!("Can't kill child, error={}", error)
+            }
+        }
+
+        self.running = false;
+    }
+
+    fn set_breakpoints(&mut self) {
+        let inferior = self.inferior.as_mut().unwrap();
+
+        for breakpoint in self.breakpoints.iter() {
+            match inferior.breakpoint(*breakpoint) {
+                Ok(orig_byte) => {
+                    self.breakpoint_map.insert(*breakpoint as u64, orig_byte);
+                }
+                Err(error) => {
+                    println!("failed set breakpoint error={}", error);
+                }
+            }
+        }
+    }
+
+    fn handle_stop_at_breakpoint(&mut self, rip: usize) {
+        let inferior = self.inferior.as_mut().unwrap();
+
+        let prev_rip = rip - 1;
+
+        // write origin back
+        let orig_byte = self.breakpoint_map.get(&(prev_rip as u64)).unwrap();
+        inferior.write_byte(prev_rip as usize, *orig_byte).unwrap();
+
+        inferior.go_back_one_step().unwrap();
+        inferior.step().unwrap();
+        inferior.wait(None).unwrap();
+        inferior.write_byte(prev_rip as usize, 204).unwrap();
+
+        inferior.cont().unwrap();
     }
 }

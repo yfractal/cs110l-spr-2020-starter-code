@@ -104,7 +104,7 @@ impl Inferior {
         let mut instruction_ptr = regs.rip;
         // start of current frame
 
-        // memory: hith ---> low
+        // memory: high ---> low
         // frame:  start_of_frame(frame top) ............ end_of_frame(bottom of frame)
         //              /\                                     /\
         //               |                                      |
@@ -112,7 +112,6 @@ impl Inferior {
         let mut frame_ptr = regs.rbp;
         // TODO: consider better error handling
         loop {
-            // println!("instruction_ptr={}", instruction_ptr);
             let line = debug_data
                 .get_line_from_addr(instruction_ptr as usize)
                 .unwrap();
@@ -126,19 +125,15 @@ impl Inferior {
                 break;
             }
 
-            // get return address base on fp
+            // get return address base on rbp
             instruction_ptr =
                 ptrace::read(self.pid(), (frame_ptr + 8) as ptrace::AddressType)? as u64;
 
-            // walk back throuh frame pointer
+            // walk stacks throuh the rbp
             frame_ptr = ptrace::read(self.pid(), frame_ptr as ptrace::AddressType)? as u64;
         }
 
         self.wait(None)
-    }
-
-    pub fn getrip(&self) -> u64 {
-        ptrace::getregs(self.pid()).unwrap().rip
     }
 
     pub fn breakpoint(&mut self, addr: usize) -> Result<u8, nix::Error> {
