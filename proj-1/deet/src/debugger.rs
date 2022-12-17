@@ -1,8 +1,10 @@
 use crate::debugger_command::DebuggerCommand;
 use crate::dwarf_data::{DwarfData, Error as DwarfError};
 use crate::inferior::{Inferior, Status};
+use nix::sys::signal;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use std::collections::HashMap;
 
 pub struct Debugger {
     target: String,
@@ -12,6 +14,7 @@ pub struct Debugger {
     running: bool,
     debug_data: DwarfData,
     breakpoints: Vec<usize>,
+    breakpoint_map: HashMap<u64, u8>,
 }
 
 impl Debugger {
@@ -47,6 +50,7 @@ impl Debugger {
             running: false,
             debug_data: debug_data,
             breakpoints: Vec::new(),
+            breakpoint_map: HashMap::new(),
         }
     }
 
@@ -69,11 +73,13 @@ impl Debugger {
                         println!("loading breakpoint");
                         for breakpoint in self.breakpoints.iter() {
                             println!("[debug] breakpoint={}", breakpoint);
-                            self.inferior
+                            let orig_byte = self
+                                .inferior
                                 .as_mut()
                                 .unwrap()
                                 .breakpoint(*breakpoint) // why need reference
                                 .unwrap();
+                            self.breakpoint_map.insert(*breakpoint as u64, orig_byte);
                         }
 
                         // TODO: when to use `?``
@@ -84,7 +90,41 @@ impl Debugger {
 
                                 let line =
                                     self.debug_data.get_line_from_addr(rip as usize).unwrap();
-                                println!("Stopped at {}:{}", line.file, line.number)
+                                println!("Stopped at {}:{}", line.file, line.number);
+
+                                // TODO: checking (%rip - 1) matches a breakpoint address
+                                if signal == signal::Signal::SIGTRAP {
+                                    // TODO: some many self.inferior.as_ref().unwrap() self.inferior.as_mut().unwrap()
+                                    let prev_rip = self.inferior.as_ref().unwrap().getrip() - 1;
+                                    println!("[debug][breakpoint] prev_rip={}", prev_rip);
+
+                                    // write origin back
+                                    let orig_byte = self.breakpoint_map.get(&prev_rip).unwrap();
+                                    self.inferior
+                                        .as_mut()
+                                        .unwrap()
+                                        .write_byte(prev_rip as usize, *orig_byte)
+                                        .unwrap();
+
+                                    self.inferior.as_ref().unwrap().go_back_one_step().unwrap();
+                                    self.inferior.as_ref().unwrap().step().unwrap();
+                                    let wait_status =
+                                        self.inferior.as_ref().unwrap().wait(None).unwrap();
+
+                                    let current_rip = self.inferior.as_ref().unwrap().getrip();
+                                    println!(
+                                        "[debug][breakpoing]: .... wait_status={:?}, rip={}",
+                                        wait_status, current_rip
+                                    );
+
+                                    self.inferior
+                                        .as_mut()
+                                        .unwrap()
+                                        .write_byte(prev_rip as usize, 204)
+                                        .unwrap();
+
+                                    self.inferior.as_ref().unwrap().cont().unwrap();
+                                }
                             }
                             other => {
                                 println!("Child stopped as {:?}", other)
@@ -120,9 +160,11 @@ impl Debugger {
                     println!("parsed addr={:?}", addr);
 
                     if !self.running {
+                        // ptrace::read(self.pid(), frame_ptr as ptrace::AddressType)? as u64;
                         self.breakpoints.push(addr);
                     } else {
-                        let rv = self.inferior.as_mut().unwrap().breakpoint(addr).unwrap();
+                        let orig_byte = self.inferior.as_mut().unwrap().breakpoint(addr).unwrap();
+                        self.breakpoint_map.insert(addr as u64, orig_byte);
                     }
                 }
                 DebuggerCommand::Quit => {

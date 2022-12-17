@@ -75,8 +75,8 @@ impl Inferior {
             WaitStatus::Exited(_pid, exit_code) => Status::Exited(exit_code),
             WaitStatus::Signaled(_pid, signal, _core_dumped) => Status::Signaled(signal),
             WaitStatus::Stopped(_pid, signal) => {
-                println!("[debug] the child is stopped");
                 let regs = ptrace::getregs(self.pid())?;
+                println!("[debug] the child is stopped, rip=#{}", regs.rip);
                 Status::Stopped(signal, regs.rip as usize)
             }
             other => panic!("waitpid returned unexpected status: {:?}", other),
@@ -134,13 +134,17 @@ impl Inferior {
 
         self.wait(None)
     }
+    pub fn getrip(&self) -> u64 {
+        ptrace::getregs(self.pid()).unwrap().rip
+    }
 
     pub fn breakpoint(&mut self, addr: usize) -> Result<u8, nix::Error> {
         self.write_byte(addr, 204)
     }
 
     // TODO: use gdb to go through this fun
-    fn write_byte(&mut self, addr: usize, val: u8) -> Result<u8, nix::Error> {
+    pub fn write_byte(&mut self, addr: usize, val: u8) -> Result<u8, nix::Error> {
+        println!("[debug][write_byte] addr={}", addr);
         let aligned_addr = align_addr_to_word(addr);
         let byte_offset = addr - aligned_addr;
         let word = ptrace::read(self.pid(), aligned_addr as ptrace::AddressType)? as u64;
@@ -153,6 +157,17 @@ impl Inferior {
             updated_word as *mut std::ffi::c_void,
         )?;
         Ok(orig_byte as u8)
+    }
+
+    pub fn go_back_one_step(&self) -> Result<(), nix::Error> {
+        let mut regs = ptrace::getregs(self.pid()).unwrap();
+        regs.rip = regs.rip - 1;
+        ptrace::setregs(self.pid(), regs)
+    }
+
+    pub fn step(&self) -> Result<(), nix::Error> {
+        // TODO: check ptrace step wait None vs some trap signal...
+        ptrace::step(self.pid(), None)
     }
 }
 
